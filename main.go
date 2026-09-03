@@ -2,14 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net"
 	"net/rpc"
 	"os"
-	"sync"
-	"bytes"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 type GrepArgs struct {
@@ -26,6 +27,16 @@ type Node struct {
 	Peers []string // VM addresses
 	Me int // the index into Nodes of this VM
 	Port string // hardcoded to ":12345" upon initialization
+}
+
+func (node *Node) generateLogFiles() {
+	filename := fmt.Sprintf("logs/machine.%d.log", node.Me)
+	content := []byte("Hello world")
+	err := os.WriteFile(filename, content, 0644)
+
+	if err != nil {
+		return
+	}
 }
 
 func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
@@ -110,12 +121,13 @@ func (node *Node) formatOutputString(replies []GrepReply) string {
 			totalLineCount += reply.LineCount
 		}
 	}
-	output += fmt.Sprintf("\nTotal lines returned: %d", totalLineCount)
+	output += fmt.Sprintf("\nTotal lines returned: %d\n", totalLineCount)
 	return output
 }
 
 
 func (node *Node) distributeAndReturnGrep(input string) string {
+	start := time.Now()
 	var wg sync.WaitGroup
 	replies := make([](GrepReply), len(node.Peers))
 	for i, addr := range(node.Peers) {
@@ -152,6 +164,10 @@ func (node *Node) distributeAndReturnGrep(input string) string {
 	wg.Wait() // wait for all RPC and self grep to finish
 
 	output := node.formatOutputString(replies)
+
+	elapsed := time.Since(start)
+
+	output += fmt.Sprintf("Elapsed time: %s\n", elapsed)
 
 	return output
 }
