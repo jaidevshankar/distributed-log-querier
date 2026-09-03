@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"math/rand/v2"
 )
 
 type GrepArgs struct {
@@ -25,24 +26,77 @@ type GrepReply struct {
 
 type Node struct {
 	Peers []string // VM addresses
-	Me int // the index into Nodes of this VM
+	PeerNumbers []string // VM numbers
+	Me int // the index into Peers of this VM
 	Port string // hardcoded to ":12345" upon initialization
 }
 
+// Constants
+
+func getPeers() []string {
+	return []string{"fa26-cs425-01.cs.illinois.edu", "fa26-cs425-02.cs.illinois.edu"}
+}
+
+func getPeerNumbers() []string {
+	return []string{"01", "02"}
+}
+
+func getPort() string {
+	return ":12345"
+}
+
+// Testing Helpers
+
 func (node *Node) generateLogFiles() {
-	filename := fmt.Sprintf("logs/machine.%d.log", node.Me)
-	content := []byte("Hello world")
-	err := os.WriteFile(filename, content, 0644)
+	filepath := node.getLogFilepath()
+	err := os.MkdirAll("logs", 0755)
 
 	if err != nil {
+		fmt.Println("Error creating log directory")
 		return
 	}
+
+	contentString := ""
+	minLines := 2000
+	maxLines := 4000
+	numLines := minLines + rand.IntN(maxLines - minLines)
+
+	for range numLines {
+		r := rand.Float64()
+		if r < 0.9 {
+			contentString += fmt.Sprintf("VM %s: frequent log happens Frequently\n", node.PeerNumbers[node.Me])
+		} else if r < 0.99 {
+			contentString += fmt.Sprintf("VM %s: infrequent log occurs infrequently\n", node.PeerNumbers[node.Me])
+		} else {
+			contentString += fmt.Sprintf("VM %s: Rare log gonna show up rarely\n", node.PeerNumbers[node.Me])
+		}
+	}
+
+	content := []byte(contentString)
+	err = os.WriteFile(filepath, content, 0644)
+
+	if err != nil {
+		fmt.Println("Error generating log file for VM", node.Peers[node.Me])
+	}
+}
+
+func (node *Node) destroyLogFiles() {
+	filepath := node.getLogFilepath()
+	os.Remove(filepath)
+	os.Remove("logs")
+}
+
+// Node related functions
+
+func (node *Node) getLogFilepath() string {
+	filepath := fmt.Sprintf("logs/machine.%s.log", node.PeerNumbers[node.Me])
+	return filepath
 }
 
 func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 	// implementation here to execute the command.
 	// args.Input is just the raw input string that the user passed (i.e. everything after `grep` e.g. "-i -E "regex here")
-	// Need to exec grep on the filepath `logs/machine.${node.Me}.log`
+	// Need to exec grep on the filepath `logs/machine.${node.PeerNumbers[node.Me]}.log`
 	// example: cmd := exec.Command("sh", "-c", fullCommand); output, err = cmd.CombinedOutput()
 		// don't use exec.Command("grep", ...args) directly since apparently it doesn't support all the flags and shit
 	// Need to set reply.LineCount (and maybe reply.Output) and reply.Error
@@ -83,7 +137,7 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 
 func (node *Node) runGrepCommand(args *GrepArgs) (output []byte, err error) {
 	// TODO: this is probably wrong. spec says that i in machine.i.log should be the VM number. what does that mean?
-	filepath := fmt.Sprintf("logs/machine.%d.log", node.Me)
+	filepath := node.getLogFilepath()
 	// extract input
 	arguments := args.Input
 	// create grep command
@@ -174,9 +228,10 @@ func (node *Node) distributeAndReturnGrep(input string) string {
 
 func main() {
 	node := new(Node)
-	node.Peers = []string{"fa26-cs425-01.cs.illinois.edu"}
+	node.Peers = getPeers()
+	node.PeerNumbers = getPeerNumbers()
 	node.Me = -1
-	node.Port = ":12345"
+	node.Port = getPort()
 
 	hostname, err := os.Hostname()
 	if err != nil {
