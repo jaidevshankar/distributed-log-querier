@@ -7,6 +7,9 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"bytes"
+	"os/exec"
+	"strings"
 )
 
 type GrepArgs struct {
@@ -32,15 +35,54 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 	// example: cmd := exec.Command("sh", "-c", fullCommand); output, err = cmd.CombinedOutput()
 		// don't use exec.Command("grep", ...args) directly since apparently it doesn't support all the flags and shit
 	// Need to set reply.LineCount (and maybe reply.Output) and reply.Error
-	
-
-	// potential errors: 
-// user tries to pass a filepath. once we append our own machine.i.log filepath, exec grep will return an error, so can return a generic error in this case. TODO: tell user not to specify a filepath in grep command
-// grep fails due to invalid pattern/ user input, will be caught by the exec command so can return an error
-// no lines matched, which will technically return an error when calling cmd.CombinedOutput(). the exit status will be 1, in which case we don't want to set reply.Error to true. we just want to set reply.Output = "" and reply.LineCount = 0
-
-// otherwise return nil since there were no errors
+	output, err := node.runGrepCommand(args)
+	// check errors
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok{
+			exitCode := exitErr.ExitCode()
+			// exit code = 1 means that there were no pattern matches which is not an actual error
+			if exitCode == 1 {
+				reply.Output = ""
+				reply.LineCount = 0
+				reply.Error = false
+				return nil
+			}
+		}
+		// if not exit code = 1, then valid error
+			// potential errors: 
+		// user tries to pass a filepath. once we append our own machine.i.log filepath, exec grep will return an error, so can return a generic error in this case. TODO: tell user not to specify a filepath in grep command
+		// grep fails due to invalid pattern/ user input, will be caught by the exec command so can return an error
+		reply.Error = true
+		fmt.Printf("Error executing command : %s\n ", err)
+		return nil
+	}
+	// successful grep
+	reply.Error = false
+	// use scanner to count lines and set reply.LineCount and reply.Output
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	count := 0
+	for scanner.Scan() {
+		count++
+	}
+	reply.LineCount = count
+	reply.Output = string(output)
+	// return nil since there were no errors
 	return nil
+}
+
+func (node *Node) runGrepCommand(args *GrepArgs) (output []byte, err error) {
+	// TODO: this is probably wrong. spec says that i in machine.i.log should be the VM number. what does that mean?
+	filepath := fmt.Sprintf("logs/machine.%d.log", node.Me)
+	// extract input
+	arguments := args.Input
+	// create grep command
+	fullCommand := fmt.Sprintf("grep -H %s %s", arguments, filepath)
+	//call grep
+	cmd := exec.Command("sh", "-c", fullCommand)
+
+	output, err = cmd.CombinedOutput()
+
+	return output, err
 }
 
 func (node *Node) runServer() {
@@ -57,55 +99,81 @@ func (node *Node) runServer() {
 	}
 }
 
-func (node *Node) runGrep(args *GrepArgs, reply *GrepReply)  {
-	// os.exec(...)
+func (node *Node) formatOutputString(replies []GrepReply) string {
+	output := ""
+	totalLineCount := 0
+	for i, reply := range replies {
+		if reply.Error {
+			output += fmt.Sprintf("Error running grep for %s. Node may have failed or connection may have been lost.\n\n", node.Peers[i])
+		} else {
+			output += fmt.Sprintf("%d Lines returned for %s:\n%s\n\n", reply.LineCount, node.Peers[i], reply.Output)
+			totalLineCount += reply.LineCount
+		}
+	}
+	output += fmt.Sprintf("\nTotal lines returned: %d", totalLineCount)
+	return output
 }
 
-// Return an error only if grep is misformatted or specifies a filepath
-func (node *Node) distributeAndReturnGrep(input string) (string, error) {
+
+func (node *Node) distributeAndReturnGrep(input string) string {
 	var wg sync.WaitGroup
 	replies := make([](GrepReply), len(node.Peers))
 	for i, addr := range(node.Peers) {
-		args := GrepArgs{}
-		args.Input = input
+		args := GrepArgs{Input: input}
 
-		if i == node.Me {
-			wg.Go(func() {
-				node.runGrep(&args, &replies[i]) 
-			})
+		if i == node.Me { // directly call instance's own function
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				node.HandleGrep(&args, &replies[index])
+			}(i)
 		} else {
-			wg.Go(func() {
-				// send RPC
-				client, err := rpc.Dial("tcp", addr + node.Port)
+			wg.Add(1)
+			go func(index int, peerAddr string) {
+				defer wg.Done()
+				client, err := rpc.Dial("tcp", peerAddr + node.Port)
 				if err != nil {
-					replies[i].Error = true
+					replies[index].Error = true
 					return
 				}
 
-				err = client.Call("Node.HandleGrep", &args, &replies[i])
+				err = client.Call("Node.HandleGrep", &args, &replies[index])
 
 				if err != nil {
-					replies[i].Error = true
+					replies[index].Error = true
 					return
 				}
 
 				client.Close()
-
-			})
+			}(i, addr)
 		}
-
-		
-
 	}
-	wg.Wait()
-	return "", nil
+
+	wg.Wait() // wait for all RPC and self grep to finish
+
+	output := node.formatOutputString(replies)
+
+	return output
 }
 
 func main() {
 	node := new(Node)
 	node.Peers = []string{"fa26-cs425-01.cs.illinois.edu"}
-	node.Me = -1 // TODO: update to match VM name to index into peers
+	node.Me = -1
 	node.Port = ":12345"
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		fmt.Println("Error determing VM hostname, exiting")
+		return
+	}
+
+	for i, peer := range node.Peers {
+		if strings.Contains(peer, hostname) {
+			node.Me = i
+			break
+		}
+	}
 
 	go node.runServer()
 
@@ -113,14 +181,9 @@ func main() {
 	for {
 		fmt.Print("Enter your grep pattern here, excluding the filepath: grep ")
 		input, _ := reader.ReadString('\n')
-		output, err := node.distributeAndReturnGrep(input)
-
-		if err != nil {
-			fmt.Println("Error running grep: ", err, ". Ensure that your syntax is correct and no filepath is specified.")
-		} else {
-			fmt.Println(output)
-		}
-		
+		input = strings.TrimSpace(input)
+		output := node.distributeAndReturnGrep(input)
+		fmt.Println(output)
 	}
 
 }
