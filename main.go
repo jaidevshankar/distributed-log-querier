@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"math/rand/v2"
 )
 
 type GrepArgs struct {
@@ -43,47 +42,6 @@ func getPeerNumbers() []string {
 
 func getPort() string {
 	return ":12345"
-}
-
-// Testing Helpers
-
-func (node *Node) generateLogFiles() {
-	filepath := node.getLogFilepath()
-	err := os.MkdirAll("logs", 0755)
-
-	if err != nil {
-		fmt.Println("Error creating log directory")
-		return
-	}
-
-	contentString := ""
-	minLines := 2000
-	maxLines := 4000
-	numLines := minLines + rand.IntN(maxLines - minLines)
-
-	for range numLines {
-		r := rand.Float64()
-		if r < 0.9 {
-			contentString += fmt.Sprintf("VM %s: frequent log happens Frequently\n", node.PeerNumbers[node.Me])
-		} else if r < 0.99 {
-			contentString += fmt.Sprintf("VM %s: infrequent log occurs infrequently\n", node.PeerNumbers[node.Me])
-		} else {
-			contentString += fmt.Sprintf("VM %s: Rare log gonna show up rarely\n", node.PeerNumbers[node.Me])
-		}
-	}
-
-	content := []byte(contentString)
-	err = os.WriteFile(filepath, content, 0644)
-
-	if err != nil {
-		fmt.Println("Error generating log file for VM", node.Peers[node.Me])
-	}
-}
-
-func (node *Node) destroyLogFiles() {
-	filepath := node.getLogFilepath()
-	os.Remove(filepath)
-	os.Remove("logs")
 }
 
 // Node related functions
@@ -179,9 +137,7 @@ func (node *Node) formatOutputString(replies []GrepReply) string {
 	return output
 }
 
-
-func (node *Node) distributeAndReturnGrep(input string) string {
-	start := time.Now()
+func (node *Node) runDistributeGrep(input string) []GrepReply {
 	var wg sync.WaitGroup
 	replies := make([](GrepReply), len(node.Peers))
 	for i, addr := range(node.Peers) {
@@ -216,13 +172,15 @@ func (node *Node) distributeAndReturnGrep(input string) string {
 	}
 
 	wg.Wait() // wait for all RPC and self grep to finish
+	return replies
+}
 
+func (node *Node) distributeAndReturnGrep(input string) string {
+	start := time.Now()
+	replies := node.runDistributeGrep(input)
 	output := node.formatOutputString(replies)
-
 	elapsed := time.Since(start)
-
 	output += fmt.Sprintf("Elapsed time: %s\n", elapsed)
-
 	return output
 }
 
