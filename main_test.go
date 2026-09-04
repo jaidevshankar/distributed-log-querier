@@ -1,14 +1,175 @@
 package main
 
 import (
-	"testing"
+	"fmt"
+	"net/rpc"
 	"os"
 	"strings"
-	"fmt"
-	"math/rand/v2"
+	"sync"
+	"testing"
 )
 
-// function for running our test cases
+// SECTION: Distribution of log generation for the report
+
+type GenerateReportLogsArgs struct {}
+
+type GenerateReportLogsReply struct {
+	Error bool
+}
+
+func (node *Node) HandleGenerateReportLogs(args *GenerateReportLogsArgs, reply *GenerateReportLogsReply) error {
+	filepath := node.getLogFilepath()
+	err := os.MkdirAll("logs", 0755)
+	os.Remove(filepath)
+
+	contentString := ""
+	numLines := 300000 // configure so that we generate log files with about 60MB size
+
+	for i := range numLines {
+		// deterministically create log files
+		if i % 100 < 90  { // frequent logs occur 90% of the time
+			contentString += fmt.Sprintf("VM #%s: frequent log happens Frequently\n", node.PeerNumbers[node.Me])
+		} else if i % 100 < 99 { // infrequent logs occur 9% of the time
+			contentString += fmt.Sprintf("VM #%s: infrequent log occurs infrequently\n", node.PeerNumbers[node.Me])
+		} else { // rare logs occur 1% of the time
+			contentString += fmt.Sprintf("VM #%s: Rare log gonna show up rarely\n", node.PeerNumbers[node.Me])
+		}
+	}
+
+	//add specific cases to each VM
+	contentString += node.buildTestCase()
+	content := []byte(contentString)
+	err = os.WriteFile(filepath, content, 0644)
+
+	if err != nil {
+		reply.Error = true
+		return err
+	}
+
+	return nil
+}
+
+// Generates report logs (IMPORTANT: use 4 nodes for the report)
+func (node *Node) distributeGenerateReportLogs() { 
+	var wg sync.WaitGroup
+	replies := make([](GenerateReportLogsReply), len(node.Peers))
+	for i, addr := range(node.Peers) {
+		
+
+		if i == node.Me { // directly call instance's own function
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				args := GenerateReportLogsArgs{}
+				node.HandleGenerateReportLogs(&args, &replies[index])
+			}(i)
+		} else {
+			wg.Add(1)
+			go func(index int, peerAddr string) {
+				defer wg.Done()
+				client, err := rpc.Dial("tcp", peerAddr + node.Port)
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+				args := GenerateReportLogsArgs{}
+				err = client.Call("Node.HandleGenerateReportLogs", &args, &replies[index])
+
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+
+				client.Close()
+			}(i, addr)
+		}
+	}
+
+	wg.Wait() // wait for all RPC and self to finish
+	for i, reply := range replies {
+		if reply.Error {
+			fmt.Println("Error creating report logs for VM", node.Peers[i])
+		}
+	}
+}
+
+
+// SECTION: Distribution of tests for logs
+type GenerateTestLogsArgs struct {
+	Content string
+}
+
+type GenerateTestLogsReply struct {
+	Error bool
+}
+
+func getNodeToTestLogContent() []string {
+	return []string{"ALL", "ALL\nSOME", "ALL", "ALL\nSOME", "ALL", "ALL\nSOME", "ALL", "ALL\nSOME", "ALL", "ALL\nSOME"} // 10 entries for 10 VMs
+}
+
+
+func (node *Node) HandleGenerateTestLogs(args *GenerateTestLogsArgs, reply *GenerateTestLogsReply) error {
+	filepath := node.getLogFilepath()
+	os.MkdirAll("logs", 0755)
+	os.Remove(filepath)
+
+	err := os.WriteFile(filepath, []byte(args.Content), 0644)
+    if err != nil {
+        reply.Error = true
+        return err
+    }
+
+	reply.Error = false
+	return nil
+}
+
+func (node *Node) distributeGenerateTestLogs() {
+	var wg sync.WaitGroup
+	nodeToTestLogContent := getNodeToTestLogContent()
+	replies := make([](GenerateTestLogsReply), len(node.Peers))
+	for i, addr := range(node.Peers) {
+		
+
+		if i == node.Me { // directly call instance's own function
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				args := GenerateTestLogsArgs{Content: nodeToTestLogContent[i]}
+				node.HandleGenerateTestLogs(&args, &replies[index])
+			}(i)
+		} else {
+			wg.Add(1)
+			go func(index int, peerAddr string) {
+				defer wg.Done()
+				client, err := rpc.Dial("tcp", peerAddr + node.Port)
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+				args := GenerateTestLogsArgs{Content: nodeToTestLogContent[i]}
+				err = client.Call("Node.HandleGenerateTestLogs", &args, &replies[index])
+
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+
+				client.Close()
+			}(i, addr)
+		}
+	}
+
+	wg.Wait() // wait for all RPC and self to finish
+	for i, reply := range replies {
+		if reply.Error {
+			fmt.Println("Error creating test logs for VM", node.Peers[i])
+		}
+	}
+}
+
+
+
+// SECTION: running test cases
 func TestGrep(t *testing.T) {
 	peers := getPeers()
 	peerNumbers := getPeerNumbers()
@@ -60,7 +221,7 @@ func TestGrep(t *testing.T) {
 			if total != tc.expected {
 				t.Errorf("pattern %q: expected %d total lines, got %d", tc.pattern, tc.expected, total)
 				}
-			}
+			},
 		)
 	
 	}
@@ -85,6 +246,8 @@ var tests = []testCase{
 	{"TEST_FREQUENT_SOME", map[int]int{0:400, 1:400, 2:400, 3:0, 4:0}},
 	{"TEST_NONE_ALL", map[int]int{0:0, 1:0, 2:0, 3:0, 4:0}},
 }
+
+//
 
 // function to build specific test cases
 func (node *Node) buildTestCase() string {
@@ -118,7 +281,6 @@ func TestSet(t *testing.T) {
 			break
 		}
 	}
-	node.generateLogFiles()
 }
 
 // cleaning up testing logs
@@ -134,48 +296,4 @@ func TestDestroy(t *testing.T) {
 			break
 		}
 	}
-	node.destroyLogFiles()
-}
-
-// Testing Helpers
-
-func (node *Node) generateLogFiles() {
-	filepath := node.getLogFilepath()
-	err := os.MkdirAll("logs", 0755)
-
-	if err != nil {
-		fmt.Println("Error creating log directory")
-		return
-	}
-
-	contentString := ""
-	minLines := 2000
-	maxLines := 4000
-	numLines := minLines + rand.IntN(maxLines - minLines)
-
-	for range numLines {
-		r := rand.Float64()
-		if r < 0.9 {
-			contentString += fmt.Sprintf("VM %s: frequent log happens Frequently\n", node.PeerNumbers[node.Me])
-		} else if r < 0.99 {
-			contentString += fmt.Sprintf("VM %s: infrequent log occurs infrequently\n", node.PeerNumbers[node.Me])
-		} else {
-			contentString += fmt.Sprintf("VM %s: Rare log gonna show up rarely\n", node.PeerNumbers[node.Me])
-		}
-	}
-
-	//add specific cases to each VM
-	contentString += node.buildTestCase()
-	content := []byte(contentString)
-	err = os.WriteFile(filepath, content, 0644)
-
-	if err != nil {
-		fmt.Println("Error generating log file for VM", node.Peers[node.Me])
-	}
-}
-
-func (node *Node) destroyLogFiles() {
-	filepath := node.getLogFilepath()
-	os.Remove(filepath)
-	os.Remove("logs")
 }
