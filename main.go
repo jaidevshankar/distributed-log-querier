@@ -21,6 +21,7 @@ type GrepReply struct {
 	Output string
 	LineCount int
 	Error bool
+	ErrorMsg string
 }
 
 type Node struct {
@@ -33,11 +34,11 @@ type Node struct {
 // Constants
 
 func getPeers() []string {
-	return []string{"fa26-cs425-01.cs.illinois.edu", "fa26-cs425-02.cs.illinois.edu"}
+	return []string{"fa26-cs425-1201.cs.illinois.edu", "fa26-cs425-1202.cs.illinois.edu"}
 }
 
 func getPeerNumbers() []string {
-	return []string{"01", "02"}
+	return []string{"1201", "1202"}
 }
 
 func getPort() string {
@@ -61,6 +62,13 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 	output, err := node.runGrepCommand(args)
 	// check errors
 	if err != nil {
+		if os.IsNotExist(err) {
+			reply.Output = ""
+			reply.LineCount = 0
+			reply.Error = true
+			reply.ErrorMsg = "Log filepath doesn't exist"
+		}
+
 		if exitErr, ok := err.(*exec.ExitError); ok{
 			exitCode := exitErr.ExitCode()
 			// exit code = 1 means that there were no pattern matches which is not an actual error
@@ -68,6 +76,7 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 				reply.Output = ""
 				reply.LineCount = 0
 				reply.Error = false
+				reply.ErrorMsg = ""
 				return nil
 			}
 		}
@@ -76,11 +85,13 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 		// user tries to pass a filepath. once we append our own machine.i.log filepath, exec grep will return an error, so can return a generic error in this case. TODO: tell user not to specify a filepath in grep command
 		// grep fails due to invalid pattern/ user input, will be caught by the exec command so can return an error
 		reply.Error = true
+		reply.ErrorMsg = "Syntax error in grep command. Ensure filepath is not specified and arguments are valid."
 		fmt.Printf("Error executing command : %s\n ", err)
 		return nil
 	}
 	// successful grep
 	reply.Error = false
+	reply.ErrorMsg = ""
 	// use scanner to count lines and set reply.LineCount and reply.Output
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	count := 0
@@ -97,6 +108,12 @@ func (node *Node) runGrepCommand(args *GrepArgs) (output []byte, err error) {
 	// TODO: this is probably wrong. spec says that i in machine.i.log should be the VM number. what does that mean?
 	filepath := node.getLogFilepath()
 	// extract input
+	_, err = os.Stat(filepath)
+
+	if err != nil {
+		return []byte(""), err
+	}
+
 	arguments := args.Input
 	// create grep command
 	fullCommand := fmt.Sprintf("grep -H %s %s", arguments, filepath)
@@ -127,7 +144,7 @@ func (node *Node) formatOutputString(replies []GrepReply) string {
 	totalLineCount := 0
 	for i, reply := range replies {
 		if reply.Error {
-			output += fmt.Sprintf("Error running grep for %s. Node may have failed or connection may have been lost.\n\n", node.Peers[i])
+			output += fmt.Sprintf("Error running grep for %s: %s.\n\n", node.Peers[i], reply.ErrorMsg)
 		} else {
 			output += fmt.Sprintf("%d Lines returned for %s:\n%s\n\n", reply.LineCount, node.Peers[i], reply.Output)
 			totalLineCount += reply.LineCount

@@ -19,11 +19,11 @@ type GenerateReportLogsReply struct {
 
 func (node *Node) HandleGenerateReportLogs(args *GenerateReportLogsArgs, reply *GenerateReportLogsReply) error {
 	filepath := node.getLogFilepath()
-	err := os.MkdirAll("logs", 0755)
+	os.MkdirAll("logs", 0755)
 	os.Remove(filepath)
 
 	contentString := ""
-	numLines := 300000 // configure so that we generate log files with about 60MB size
+	numLines := 1000 // configure so that we generate log files with about 60MB size
 
 	for i := range numLines {
 		// deterministically create log files
@@ -39,7 +39,7 @@ func (node *Node) HandleGenerateReportLogs(args *GenerateReportLogsArgs, reply *
 	//add specific cases to each VM
 	contentString += node.buildTestCase()
 	content := []byte(contentString)
-	err = os.WriteFile(filepath, content, 0644)
+	err := os.WriteFile(filepath, content, 0644)
 
 	if err != nil {
 		reply.Error = true
@@ -167,7 +167,20 @@ func (node *Node) distributeGenerateTestLogs() {
 	}
 }
 
-
+func TestSetupLogFiles(t *testing.T) {
+	peers := getPeers()
+	peerNumbers := getPeerNumbers()
+	port := getPort()
+	node := Node{Peers: peers, PeerNumbers: peerNumbers, Me: 0, Port: port}
+	hostname, _ := os.Hostname()
+	for i, peer := range node.Peers {
+		if strings.Contains(peer, hostname) {
+			node.Me = i
+			break
+		}
+	}
+	node.distributeGenerateReportLogs()
+}
 
 // SECTION: running test cases
 func TestGrep(t *testing.T) {
