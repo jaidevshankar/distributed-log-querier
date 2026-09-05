@@ -67,6 +67,7 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 			reply.LineCount = 0
 			reply.Error = true
 			reply.ErrorMsg = "Log filepath doesn't exist"
+			return nil
 		}
 
 		if exitErr, ok := err.(*exec.ExitError); ok{
@@ -232,4 +233,202 @@ func main() {
 		fmt.Println(output)
 	}
 
+}
+
+// SECTION: Distribution of log generation for the report
+// moved to main.go because Go will not compile tests file unless specifically run and runServer() is run here
+// this can be changed in the future
+
+type GenerateReportLogsArgs struct {}
+
+type GenerateReportLogsReply struct {
+	Error bool
+}
+
+func (node *Node) HandleGenerateReportLogs(args *GenerateReportLogsArgs, reply *GenerateReportLogsReply) error {
+	filepath := node.getLogFilepath()
+	os.MkdirAll("logs", 0755)
+	os.Remove(filepath)
+
+	contentString := ""
+	numLines := 1000 // configure so that we generate log files with about 60MB size
+
+	for i := range numLines {
+		// deterministically create log files
+		if i % 100 < 90  { // frequent logs occur 90% of the time
+			contentString += fmt.Sprintf("VM #%s: frequent log happens Frequently\n", node.PeerNumbers[node.Me])
+		} else if i % 100 < 99 { // infrequent logs occur 9% of the time
+			contentString += fmt.Sprintf("VM #%s: infrequent log occurs infrequently\n", node.PeerNumbers[node.Me])
+		} else { // rare logs occur 1% of the time
+			contentString += fmt.Sprintf("VM #%s: Rare log gonna show up rarely\n", node.PeerNumbers[node.Me])
+		}
+	}
+
+	//add specific cases to each VM
+	contentString += node.buildTestCase()
+	content := []byte(contentString)
+	err := os.WriteFile(filepath, content, 0644)
+
+	if err != nil {
+		reply.Error = true
+		return err
+	}
+
+	return nil
+}
+
+// Generates report logs (IMPORTANT: use 4 nodes for the report)
+func (node *Node) distributeGenerateReportLogs() { 
+	var wg sync.WaitGroup
+	replies := make([](GenerateReportLogsReply), len(node.Peers))
+	for i, addr := range(node.Peers) {
+		
+
+		if i == node.Me { // directly call instance's own function
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				args := GenerateReportLogsArgs{}
+				node.HandleGenerateReportLogs(&args, &replies[index])
+			}(i)
+		} else {
+			wg.Add(1)
+			go func(index int, peerAddr string) {
+				defer wg.Done()
+				client, err := rpc.Dial("tcp", peerAddr + node.Port)
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+				args := GenerateReportLogsArgs{}
+				err = client.Call("Node.HandleGenerateReportLogs", &args, &replies[index])
+
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+
+				client.Close()
+			}(i, addr)
+		}
+	}
+
+	wg.Wait() // wait for all RPC and self to finish
+	for i, reply := range replies {
+		if reply.Error {
+			fmt.Println("Error creating report logs for VM", node.Peers[i])
+		}
+	}
+}
+
+
+// SECTION: Distribution of tests for logs
+type GenerateTestLogsArgs struct {
+	Content string
+}
+
+type GenerateTestLogsReply struct {
+	Error bool
+}
+
+func getNodeToTestLogContent() []string {
+	return []string{"ALL", "ALL\nSOME", "ALL", "ALL\nSOME", "ALL", "ALL\nSOME", "ALL", "ALL\nSOME", "ALL", "ALL\nSOME"} // 10 entries for 10 VMs
+}
+
+
+func (node *Node) HandleGenerateTestLogs(args *GenerateTestLogsArgs, reply *GenerateTestLogsReply) error {
+	filepath := node.getLogFilepath()
+	os.MkdirAll("logs", 0755)
+	os.Remove(filepath)
+
+	err := os.WriteFile(filepath, []byte(args.Content), 0644)
+    if err != nil {
+        reply.Error = true
+        return err
+    }
+
+	reply.Error = false
+	return nil
+}
+
+func (node *Node) distributeGenerateTestLogs() {
+	var wg sync.WaitGroup
+	nodeToTestLogContent := getNodeToTestLogContent()
+	replies := make([](GenerateTestLogsReply), len(node.Peers))
+	for i, addr := range(node.Peers) {
+		
+
+		if i == node.Me { // directly call instance's own function
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				args := GenerateTestLogsArgs{Content: nodeToTestLogContent[i]}
+				node.HandleGenerateTestLogs(&args, &replies[index])
+			}(i)
+		} else {
+			wg.Add(1)
+			go func(index int, peerAddr string) {
+				defer wg.Done()
+				client, err := rpc.Dial("tcp", peerAddr + node.Port)
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+				args := GenerateTestLogsArgs{Content: nodeToTestLogContent[i]}
+				err = client.Call("Node.HandleGenerateTestLogs", &args, &replies[index])
+
+				if err != nil {
+					replies[index].Error = true
+					return
+				}
+
+				client.Close()
+			}(i, addr)
+		}
+	}
+
+	wg.Wait() // wait for all RPC and self to finish
+	for i, reply := range replies {
+		if reply.Error {
+			fmt.Println("Error creating test logs for VM", node.Peers[i])
+		}
+	}
+}
+//test struct
+type testCase struct {
+	pattern string
+	countsbyVM map[int]int // machine index -> lines on machine
+}
+//test with pattern and hardcoded count per entry, we should consider removing this since it seems unecessary
+// keeping for now just for safety if we want to go back to this
+var tests = []testCase{
+	{"TEST_RARE_ONE", map[int]int{0: 3, 1: 0, 2: 0, 3:0, 4:0}},
+	{"TEST_RARE_ALL", map[int]int{0:2, 1:2, 2:2, 3:2, 4:2}},
+	{"TEST_RARE_SOME", map[int]int{0:2,1:0,2:0,3:2,4:2}},
+	{"TEST_INFREQUENT_ONE", map[int]int{0:50, 1:0, 2:0, 3:0, 4:0}},
+	{ "TEST_INFREQUENT_ALL", map[int]int{0: 40, 1:40, 2:40, 3:40, 4:40}},
+	{"TEST_INFREQUENT_SOME", map[int]int{0:40, 1:40, 2:0, 3:40, 4:0}},
+	{"TEST_FREQUENT_ONE", map[int]int{0:500, 1:0, 2:0, 3:0, 4:0}},
+	{"TEST_FREQUENT_ALL", map[int]int{0:400, 1:400, 2:400, 3:400, 4:400}},
+	{"TEST_FREQUENT_SOME", map[int]int{0:400, 1:400, 2:400, 3:0, 4:0}},
+	{"TEST_NONE_ALL", map[int]int{0:0, 1:0, 2:0, 3:0, 4:0}},
+}
+
+//
+
+// function to build specific test cases
+func (node *Node) buildTestCase() string {
+	content := ""
+	// iterate through every test, this is specific to each VM
+	for _,entry := range tests {
+		count, present := entry.countsbyVM[node.Me]
+		if !present || count == 0 {
+			continue
+		}
+		// add specifc log lines with the test identifier for as many lines as specified
+		for i:= 0; i < count; i++ {
+			content+= fmt.Sprintf("%s test line\n", entry.pattern)
+		}
+	}
+	return content
 }
