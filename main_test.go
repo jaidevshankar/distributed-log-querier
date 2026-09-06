@@ -148,7 +148,7 @@ func TestHandleGrepLocal(t * testing.T) {
 			if !strings.Contains(reply.Output, filepath) {
 				t.Errorf("input %q: expected output to include filename %q, got %q", tc.input, filepath, reply.Output)
 			}
-		}
+		},
 		)
 	}
 	// check that grep correcty handles a missing log case by removing built filepath
@@ -179,6 +179,7 @@ func TestNodeFailure(t * testing.T) {
 			break
 		}
 	}
+	node.distributeGenerateTestLogs()
 	// specifically add a fake address  to simulate a node failure
 	actualPeerCount := len(node.Peers)
 	node.Peers = append(node.Peers, "fa26-cs425-9999.cs.illinois.edu") // add fake address
@@ -191,6 +192,7 @@ func TestNodeFailure(t * testing.T) {
 	// ensure that everything else works properly, as of now just redoing ALL test
 	for i := 0; i < actualPeerCount; i++ {
 		if replies[i].Error {
+			t.Errorf("Error message %s", replies[i].ErrorMsg)
 			t.Errorf("real peer %s unexpectedly reported an error", node.Peers[i])
 			continue
 		}

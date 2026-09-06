@@ -34,11 +34,11 @@ type Node struct {
 // Constants
 
 func getPeers() []string {
-	return []string{"fa26-cs425-1201.cs.illinois.edu", "fa26-cs425-1202.cs.illinois.edu"}
+	return []string{"fa26-cs425-1201.cs.illinois.edu", "fa26-cs425-1202.cs.illinois.edu", "fa26-cs425-1203.cs.illinois.edu", "fa26-cs425-1204.cs.illinois.edu"}
 }
 
 func getPeerNumbers() []string {
-	return []string{"1201", "1202"}
+	return []string{"1201", "1202", "1203", "1204"}
 }
 
 func getPort() string {
