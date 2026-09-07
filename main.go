@@ -60,6 +60,7 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 		// don't use exec.Command("grep", ...args) directly since apparently it doesn't support all the flags and shit
 	// Need to set reply.LineCount (and maybe reply.Output) and reply.Error
 	output, err := node.runGrepCommand(args)
+	
 	// check errors
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -100,7 +101,12 @@ func (node *Node) HandleGrep (args *GrepArgs, reply *GrepReply) error {
 		count++
 	}
 	reply.LineCount = count
-	reply.Output = string(output)
+	maxLines := 50 // configurable
+	if count > maxLines {
+        reply.Output = fmt.Sprintf("Over %d lines returned, skipping printing the output", maxLines)
+    } else {
+        reply.Output = string(output)
+    }
 	// return nil since there were no errors
 	return nil
 }
@@ -251,23 +257,20 @@ func (node *Node) HandleGenerateReportLogs(args *GenerateReportLogsArgs, reply *
 	os.Remove(filepath)
 
 	contentString := ""
-	numLines := 1000 // configure so that we generate log files with about 60MB size
 
-	for i := range numLines {
+	for i := range 100 {
 		// deterministically create log files
-		if i % 100 < 90  { // frequent logs occur 90% of the time
+		if i < 90  { // frequent logs occur 90% of the time
 			contentString += fmt.Sprintf("VM #%s: frequent log happens Frequently\n", node.PeerNumbers[node.Me])
-		} else if i % 100 < 99 { // infrequent logs occur 9% of the time
-			contentString += fmt.Sprintf("VM #%s: infrequent log occurs infrequently\n", node.PeerNumbers[node.Me])
+		} else if i < 99 { // infrequent logs occur 9% of the time
+			contentString += fmt.Sprintf("VM #%s: infreq log occurs infrequenttly\n", node.PeerNumbers[node.Me])
 		} else { // rare logs occur 1% of the time
 			contentString += fmt.Sprintf("VM #%s: Rare log gonna show up rarely\n", node.PeerNumbers[node.Me])
 		}
 	}
 
-	//add specific cases to each VM
-	contentString += node.buildTestCase()
-	content := []byte(contentString)
-	err := os.WriteFile(filepath, content, 0644)
+	shellCmd := fmt.Sprintf("yes '%s' | head -c 60M > %s", contentString, filepath)
+    err := exec.Command("bash", "-c", shellCmd).Run()
 
 	if err != nil {
 		reply.Error = true
@@ -398,37 +401,4 @@ func (node *Node) distributeGenerateTestLogs() {
 type testCase struct {
 	pattern string
 	countsbyVM map[int]int // machine index -> lines on machine
-}
-//test with pattern and hardcoded count per entry, we should consider removing this since it seems unecessary
-// keeping for now just for safety if we want to go back to this
-var tests = []testCase{
-	{"TEST_RARE_ONE", map[int]int{0: 3, 1: 0, 2: 0, 3:0, 4:0}},
-	{"TEST_RARE_ALL", map[int]int{0:2, 1:2, 2:2, 3:2, 4:2}},
-	{"TEST_RARE_SOME", map[int]int{0:2,1:0,2:0,3:2,4:2}},
-	{"TEST_INFREQUENT_ONE", map[int]int{0:50, 1:0, 2:0, 3:0, 4:0}},
-	{ "TEST_INFREQUENT_ALL", map[int]int{0: 40, 1:40, 2:40, 3:40, 4:40}},
-	{"TEST_INFREQUENT_SOME", map[int]int{0:40, 1:40, 2:0, 3:40, 4:0}},
-	{"TEST_FREQUENT_ONE", map[int]int{0:500, 1:0, 2:0, 3:0, 4:0}},
-	{"TEST_FREQUENT_ALL", map[int]int{0:400, 1:400, 2:400, 3:400, 4:400}},
-	{"TEST_FREQUENT_SOME", map[int]int{0:400, 1:400, 2:400, 3:0, 4:0}},
-	{"TEST_NONE_ALL", map[int]int{0:0, 1:0, 2:0, 3:0, 4:0}},
-}
-
-//
-
-// function to build specific test cases
-func (node *Node) buildTestCase() string {
-	content := ""
-	// iterate through every test, this is specific to each VM
-	for _,entry := range tests {
-		count, present := entry.countsbyVM[node.Me]
-		if !present || count == 0 {
-			continue
-		}
-		// add specifc log lines with the test identifier for as many lines as specified
-		for i:= 0; i < count; i++ {
-			content+= fmt.Sprintf("%s test line\n", entry.pattern)
-		}
-	}
-	return content
 }
